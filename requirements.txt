@@ -1,5 +1,3 @@
 streamlit
-anthropic
 openai
 google-generativeai
-pypdf
