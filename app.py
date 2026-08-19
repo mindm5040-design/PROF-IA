@@ -9,20 +9,26 @@ st.markdown("""
 <style>
 .stApp { background-color: #F6F4EF; color: #26241F; }
 section[data-testid="stSidebar"] { background-color: #EFEBE1; border-right: 1px solid #DEDACB; }
-h1, h2, h3 { font-family: Georgia, serif; color: #23392F; }
-.stChatMessage { background-color: #FFFFFF; border: 1px solid #E4DFD0; border-radius: 8px; }
+h1, h2, h3 { font-family: Georgia, serif; color: #23392F; letter-spacing: 0.01em; }
+.stChatMessage {
+    background-color: #FFFFFF; border: 1px solid #E4DFD0; border-radius: 10px;
+    box-shadow: 0 1px 3px rgba(35,57,47,0.06); padding: 4px 6px;
+}
 .stButton>button {
     background-color: #23392F; color: #F6F4EF; border: none; font-weight: 600; border-radius: 6px;
+    transition: background-color .15s ease;
 }
 .stButton>button:hover { background-color: #2F5D50; color: #F6F4EF; }
 .stTextInput>div>div>input, .stTextArea textarea, .stSelectbox>div>div {
     background-color: #FFFFFF !important; color: #26241F !important; border: 1px solid #DEDACB !important;
+    border-radius: 6px !important;
 }
 [data-testid="stChatInput"] textarea { background-color: #FFFFFF !important; color: #26241F !important; }
 .badge {
-    display:inline-block; border:1px solid #DEDACB; border-radius:14px; padding:3px 10px;
-    font-size:0.75rem; color:#6B6656; margin-right:6px; background-color:#FFFFFF;
+    display:inline-block; border:1px solid #DEDACB; border-radius:14px; padding:4px 12px;
+    font-size:0.75rem; color:#23392F; margin-right:6px; background-color:#FFFFFF; font-weight:600;
 }
+.stCaption { color: #6B6656 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -58,6 +64,20 @@ RÈGLES STRICTES :
 
 Matière actuelle : {matiere}"""
 
+def extract_pdf_text(file_bytes, max_chars=6000):
+    try:
+        import io
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(file_bytes))
+        text = ""
+        for page in reader.pages:
+            text += (page.extract_text() or "") + "\n"
+            if len(text) > max_chars:
+                break
+        return text[:max_chars].strip()
+    except Exception as e:
+        return f"[Impossible de lire ce PDF : {e}]"
+
 NIVEAUX = ["CP","CE1","CE2","CM1","CM2","6e","5e","4e","3e","2nde","1ère","Terminale","Licence","Master"]
 MATIERES = ["Mathématiques","Physique","SVT","Français","Anglais","Histoire-Géo","Philosophie","Informatique","ECM","Autre"]
 
@@ -65,7 +85,7 @@ MATIERES = ["Mathématiques","Physique","SVT","Français","Anglais","Histoire-G�
 def call_claude(system, history, image_b64=None, image_mime=None):
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=CLAUDE_KEY)
+        client = anthropic.Anthropic(api_key=CLAUDE_KEY, max_retries=0, timeout=15.0)
         messages = []
         for m in history:
             content = []
@@ -73,7 +93,7 @@ def call_claude(system, history, image_b64=None, image_mime=None):
                 content.append({"type":"image","source":{"type":"base64","media_type":m["image_mime"],"data":m["image_b64"]}})
             content.append({"type":"text","text": m["content"] or "Regarde la photo jointe."})
             messages.append({"role": m["role"], "content": content})
-        resp = client.messages.create(model=CLAUDE_MODEL, max_tokens=1024, system=system, messages=messages)
+        resp = client.messages.create(model=CLAUDE_MODEL, max_tokens=700, system=system, messages=messages)
         return "".join(b.text for b in resp.content if hasattr(b, "text")).strip(), None
     except Exception as e:
         return None, str(e)
@@ -81,7 +101,7 @@ def call_claude(system, history, image_b64=None, image_mime=None):
 def call_openai(system, history):
     try:
         import openai
-        client = openai.OpenAI(api_key=OPENAI_KEY)
+        client = openai.OpenAI(api_key=OPENAI_KEY, max_retries=0, timeout=15.0)
         messages = [{"role":"system","content":system}]
         for m in history:
             if m.get("image_b64"):
@@ -91,7 +111,7 @@ def call_openai(system, history):
                 ]})
             else:
                 messages.append({"role": m["role"], "content": m["content"]})
-        resp = client.chat.completions.create(model=OPENAI_MODEL, messages=messages, max_tokens=1024)
+        resp = client.chat.completions.create(model=OPENAI_MODEL, messages=messages, max_tokens=700)
         return resp.choices[0].message.content.strip(), None
     except Exception as e:
         return None, str(e)
@@ -107,7 +127,7 @@ def call_gemini(system, history):
             if m.get("image_b64"):
                 parts.append({"mime_type": m["image_mime"], "data": base64.b64decode(m["image_b64"])})
             contents.append({"role": "model" if m["role"]=="assistant" else "user", "parts": parts})
-        resp = model.generate_content(contents)
+        resp = model.generate_content(contents, request_options={"timeout": 15})
         return resp.text.strip(), None
     except Exception as e:
         return None, str(e)
@@ -178,7 +198,7 @@ with st.sidebar:
     st.markdown("#### Contexte")
     classe = st.selectbox("Classe", NIVEAUX, index=5)
     matiere = st.selectbox("Matière", MATIERES, index=0)
-    photo = st.file_uploader("Photo d'exercice (optionnel)", type=["png","jpg","jpeg"])
+    fichier = st.file_uploader("Ajouter un fichier (photo ou PDF)", type=["png","jpg","jpeg","pdf"])
     if st.button("Nouvelle conversation"):
         st.session_state.messages = []
         st.rerun()
@@ -190,24 +210,31 @@ if "messages" not in st.session_state:
 
 for msg in st.session_state.messages:
     with st.chat_message("user" if msg["role"]=="user" else "assistant"):
-        st.markdown(msg["content"])
+        st.markdown(msg.get("display") or msg["content"])
         if msg.get("image_b64"):
             st.image(base64.b64decode(msg["image_b64"]))
 
 prompt = st.chat_input("Écris ta question ici...")
 
-if prompt or photo:
+if prompt or fichier:
     image_b64, image_mime = None, None
-    if photo:
-        raw = photo.read()
-        image_b64 = base64.b64encode(raw).decode("utf-8")
-        image_mime = photo.type or "image/jpeg"
+    pdf_text = None
+    if fichier:
+        raw = fichier.read()
+        if fichier.type == "application/pdf":
+            pdf_text = extract_pdf_text(raw)
+        else:
+            image_b64 = base64.b64encode(raw).decode("utf-8")
+            image_mime = fichier.type or "image/jpeg"
 
-    user_text = prompt or "Voici une photo de mon exercice, aide-moi."
-    st.session_state.messages.append({"role":"user","content":user_text,"image_b64":image_b64,"image_mime":image_mime})
+    user_text = prompt or ("Voici un document, aide-moi." if pdf_text else "Voici une photo de mon exercice, aide-moi.")
+    if pdf_text:
+        user_text = f"{user_text}\n\n[Contenu du document joint]\n{pdf_text}"
+    display_text = prompt or ("📄 Document joint" if pdf_text else "📷 Photo jointe")
+    st.session_state.messages.append({"role":"user","content":user_text,"display":display_text,"image_b64":image_b64,"image_mime":image_mime})
 
     with st.chat_message("user"):
-        st.markdown(user_text)
+        st.markdown(display_text)
         if image_b64:
             st.image(base64.b64decode(image_b64))
 
@@ -219,4 +246,3 @@ if prompt or photo:
             st.session_state.messages.append({"role":"assistant","content":answer,"image_b64":None,"image_mime":None})
         else:
             st.error(f"ProfIA n'a pas pu répondre pour le moment. Détail technique : {error}")
-    
