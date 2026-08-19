@@ -1,26 +1,27 @@
 import streamlit as st
 import base64
+from concurrent.futures import ThreadPoolExecutor
 
 st.set_page_config(page_title="ProfIA — Intelligence pédagogique unifiée", page_icon="◆", layout="centered")
 
-# ========== 1. DESIGN NOIR / OR ==========
+# ========== 1. DESIGN BLANC DOUX ==========
 st.markdown("""
 <style>
-.stApp { background-color: #0A0A0B; color: #EDEAE2; }
-section[data-testid="stSidebar"] { background-color: #131315; border-right: 1px solid #2A2A2D; }
-h1, h2, h3 { font-family: Georgia, serif; color: #EDEAE2; }
-.stChatMessage { background-color: #1B1B1E; border-radius: 6px; }
+.stApp { background-color: #F6F4EF; color: #26241F; }
+section[data-testid="stSidebar"] { background-color: #EFEBE1; border-right: 1px solid #DEDACB; }
+h1, h2, h3 { font-family: Georgia, serif; color: #23392F; }
+.stChatMessage { background-color: #FFFFFF; border: 1px solid #E4DFD0; border-radius: 8px; }
 .stButton>button {
-    background-color: #C9A227; color: #0A0A0B; border: none; font-weight: 600;
+    background-color: #23392F; color: #F6F4EF; border: none; font-weight: 600; border-radius: 6px;
 }
-.stButton>button:hover { background-color: #DDB74A; color: #0A0A0B; }
+.stButton>button:hover { background-color: #2F5D50; color: #F6F4EF; }
 .stTextInput>div>div>input, .stTextArea textarea, .stSelectbox>div>div {
-    background-color: #1B1B1E !important; color: #EDEAE2 !important; border: 1px solid #2A2A2D !important;
+    background-color: #FFFFFF !important; color: #26241F !important; border: 1px solid #DEDACB !important;
 }
-[data-testid="stChatInput"] textarea { background-color: #1B1B1E !important; color: #EDEAE2 !important; }
+[data-testid="stChatInput"] textarea { background-color: #FFFFFF !important; color: #26241F !important; }
 .badge {
-    display:inline-block; border:1px solid #2A2A2D; border-radius:14px; padding:3px 10px;
-    font-size:0.75rem; color:#8C897F; margin-right:6px;
+    display:inline-block; border:1px solid #DEDACB; border-radius:14px; padding:3px 10px;
+    font-size:0.75rem; color:#6B6656; margin-right:6px; background-color:#FFFFFF;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -143,12 +144,20 @@ def get_profia_answer(classe, matiere, history):
 
     drafts = []
     errors = []
-    for name, key, fn in active:
-        text, err = fn(system, history)
-        if text:
-            drafts.append(text)
-        else:
-            errors.append(f"{name}: {err}")
+    # Appels en parallèle : le temps d'attente devient celui du modèle le plus lent,
+    # pas la somme de tous les modèles.
+    with ThreadPoolExecutor(max_workers=len(active)) as executor:
+        futures = {executor.submit(fn, system, history): name for name, key, fn in active}
+        for future in futures:
+            name = futures[future]
+            try:
+                text, err = future.result()
+            except Exception as e:
+                text, err = None, str(e)
+            if text:
+                drafts.append(text)
+            else:
+                errors.append(f"{name}: {err}")
 
     if not drafts:
         return None, " | ".join(errors) if errors else "Aucun modèle n'a répondu."
@@ -162,7 +171,7 @@ def get_profia_answer(classe, matiere, history):
         return drafts[0], None  # si la fusion échoue, on renvoie quand même une réponse valable
 
 # ========== 5. INTERFACE ==========
-st.markdown("## ◆ ProfIA")
+st.markdown("## 🌿 ProfIA")
 st.caption("Intelligence pédagogique unifiée")
 
 with st.sidebar:
@@ -210,3 +219,4 @@ if prompt or photo:
             st.session_state.messages.append({"role":"assistant","content":answer,"image_b64":None,"image_mime":None})
         else:
             st.error(f"ProfIA n'a pas pu répondre pour le moment. Détail technique : {error}")
+    
